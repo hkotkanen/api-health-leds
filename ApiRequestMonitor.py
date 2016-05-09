@@ -1,38 +1,11 @@
 from ws4py.client.threadedclient import WebSocketClient
-from pprint import pprint
 import json
-import queue
 from collections import deque
 import threading
 import time
 
 leds = ['misc', 'linkedevents', 'kerrokantasi', 'respa', 'servicemap']
 led_qs = {name : deque() for name in leds}
-
-# class Api2LedBroker():
-#
-#     def __init__(self):
-#         #init led strip
-#         #init queue
-#         # self.q = queue.Queue()
-#         self.led_qs = {name : queue.Queue() for name in leds}
-#
-#     def add_msg(self, msgdict):
-#         # print(msgdict['response'])
-#         msg = msgdict['response'] if 'response' in msgdict else "----WTF----"
-#         if 'api_name' in msgdict:
-#             # print(msgdict['api_name'])
-#             msg += ' ' + msgdict['api_name']
-#             self.led_qs[msgdict['api_name']].append(msgdict)
-#         else:
-#             msg += ' ' + msgdict['request']
-#             self.led_qs['misc'].append(msgdict)
-#         # self.q.put(msgdict)
-#         print(msg)
-#
-#     def blink(q, delay=0.1):
-#
-#         pass
 
 class ApiRequestMonitor(WebSocketClient):
     # def __init__(self, **kwargs):
@@ -62,71 +35,47 @@ class ApiRequestMonitor(WebSocketClient):
             led_qs['misc'].append(data)
             # print(data['request'])
 
-        # print([len(l) for l in led_qs.values()])
-
-        # if 'uptimerobot' in data['agent'].lower():
-        #     print('{} returned to UptimeRobot/{}'.format(data['response'], data['clientip']))
-        # elif '127.0.0.1' in data['clientip']:
-        #     print('{} returned from {}, requested from localhost'.format(data['response'], data['request']))
-        # else:
-        #     try:
-        #         print('{} returned from {}, requested from {}'.format(data['response'], data['api_name'], data['clientip']))
-        #     except KeyError as e:
-        #         print('KeyError:'+str(e), data)
-        #     except e:
-        #         print(e, m)
-
+#generator yielding lengths of queues
 def deque_len():
     while True:
         yield [len(l) for l in led_qs.values()]
-
+#function (run in own thread) to consume above generator
 def print_deque_len():
     length = deque_len()
     for l in length:
         print(l)
         time.sleep(5)
 
+#generator yielding (FIFO) request objects
 def req_from_q(q):
     while True:
         try:
             yield q.popleft()
         except IndexError:
             yield None
-
-def blink(q, delay=1):
-    # while True:
-    #     try:
-    #         req = q.popleft()
-    #         apiname = req['api_name'] if 'api_name' in req else 'misc'
-    #         print('BLINK ON {} {}'.format(req['response'], apiname))
-    #         time.sleep(delay)
-    #         print('BLINK OFF {}'.format(apiname))
-    #     except IndexError as e:
-    #         pass
-    #     except Exception as e:
-    #         print(e)
+#function (run in own thread) to consume above generator
+#   sleeps for 0.2 if there's nothing in the queue OR
+#   blinks for a second and remains off for 0.2 if we did get an item
+def blink(q, duration=1):
     requests = req_from_q(q)
     for req in requests:
-
         if not req:
             time.sleep(0.2)
             continue
-
         apiname = req['api_name'] if 'api_name' in req else 'misc'
         print('BLINK ON {} {}'.format(req['response'], apiname))
-        time.sleep(delay)
+        time.sleep(duration)
         print('BLINK OFF {}'.format(apiname))
         time.sleep(0.2)
 
-
-
 if __name__ == '__main__':
-    #debug print the lengths of the queues
-    # printer = threading.Thread(target=print_deque_len)
-    # printer.start()
+    #debug print the lengths of the queues to make sure they don't grow forever
     threading.Thread(target=print_deque_len).start()
+
+    #individual threads (& deques) for individual LEDs / APIs
     for q in led_qs.values():
-        threading.Thread(target=blink, args=(q,), daemon=True).start()
+        threading.Thread(target=blink, args=(q,)).start()
+
     try:
         ws = ApiRequestMonitor(url='ws://logstash.hel.ninja:3249', protocols=['http-only', 'chat'])
         ws.connect()
