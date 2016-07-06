@@ -3,9 +3,12 @@ import json
 from collections import deque
 import threading
 import time
+from bibliopixel.led import *
+from bibliopixel.drivers.LPD8806 import *
 
-leds = ['misc', 'linkedevents', 'kerrokantasi', 'respa', 'servicemap']
-led_qs = {name : deque() for name in leds}
+# '_ping' is a test from uptimerobot, a kind of meta-API if you will
+apis = ['_ping', 'misc', 'linkedevents', 'kerrokantasi', 'respa', 'servicemap']
+led_qs = {name : deque() for name in apis}
 
 class ApiRequestMonitor(WebSocketClient):
     # def __init__(self, **kwargs):
@@ -38,7 +41,7 @@ class ApiRequestMonitor(WebSocketClient):
 #generator yielding lengths of queues
 def deque_len():
     while True:
-        yield [len(l) for l in led_qs.values()]
+        yield [{key:len(val)} for key,val in led_qs.items()]
 #function (run in own thread) to consume above generator
 def print_deque_len():
     length = deque_len()
@@ -56,25 +59,52 @@ def req_from_q(q):
 #function (run in own thread) to consume above generator
 #   sleeps for 0.2 if there's nothing in the queue OR
 #   blinks for a second and remains off for 0.2 if we did get an item
-def blink(q, duration=1):
+def blink(strip, led_i, q, duration=0.2):
+    strip.set(led_i, (50,50,50))
+    strip.update()
     requests = req_from_q(q)
     for req in requests:
         if not req:
-            time.sleep(0.2)
+            strip.set(led_i, (50,50,50))
+            strip.update()
+            time.sleep(0.1)
             continue
-        apiname = req['api_name'] if 'api_name' in req else 'misc'
-        print('BLINK ON {} {}'.format(req['response'], apiname))
+        # apiname = req['api_name'] if 'api_name' in req else 'misc'
+        responsecode = req.get('response', None)
+
+        if not responsecode:
+            message = req.get('message', None)
+            try:
+                print(message.split('"')[2].split()[0])
+                responsecode = message.split('"')[2].split()[0]
+            except:
+                print(req)
+                responsecode = '?'
+
+        if responsecode[0] == '2':
+            strip.set(led_i, (30,240,30))
+        elif responsecode[0] in ['4', '5']:
+            strip.set(led_i, (240,30,30))
+        else:
+            strip.set(led_i, (30,30,240))
+        strip.update()
         time.sleep(duration)
-        print('BLINK OFF {}'.format(apiname))
-        time.sleep(0.2)
+        # print('BLINK OFF {}'.format(apiname))
+        strip.set(led_i, (50,50,50))
+        strip.update()
+        time.sleep(0.1)
 
 if __name__ == '__main__':
+
+    driver = DriverLPD8806(104, use_py_spi=True, c_order=ChannelOrder.GRB)
+    strip = LEDStrip(driver)
+
     #debug print the lengths of the queues to make sure they don't grow forever
     threading.Thread(target=print_deque_len).start()
 
     #individual threads (& deques) for individual LEDs / APIs
-    for q in led_qs.values():
-        threading.Thread(target=blink, args=(q,)).start()
+    for i,q in enumerate(led_qs.values()):
+        threading.Thread(target=blink, args=(strip, i*2, q,)).start()
 
     try:
         ws = ApiRequestMonitor(url='ws://logstash.hel.ninja:3249', protocols=['http-only', 'chat'])
